@@ -30,6 +30,7 @@ class OESAnalyzer:
     def __init__(self):
         """Initialize the OES Analyzer."""
         self._all_data: Dict[float, List[float]] = {}
+        self.selected_files = []  # 初始化 selected_files 屬性
         logger.info("OES Analyzer initialized")
 
     @staticmethod
@@ -219,15 +220,15 @@ class OESAnalyzer:
 
             # 添加最大值波段信息到標題
             title_text = (f'ALL_Spectrum & Higher Peaks \n'
-                        f'Max_peak: {max_peak1["波段"]:.1f}nm')
+                        f'Max_peak: {peaks1[0]["波段"]:.1f}nm')
             plt.title(title_text)
             
             # 繪製線條
             plt.plot(wavelengths1, y1, color='red', label='Highest_data', linewidth=1)
 
             marked_peaks = []
-            for index, peak in enumerate(sorted_peaks):
-                if len(marked_peaks) >= 5:
+            for index, peak in enumerate(peaks1):
+                if len(marked_peaks) >= 3:
                     break
                 
                 # 檢查是否需要跳過範圍
@@ -236,7 +237,7 @@ class OESAnalyzer:
                     offset = len(marked_peaks) * 10  # 根據已標註的數量調整偏移量
                     rotation_angle = 0
                     # Adjust annotation to connect to the left side of the x-axis with dashed lines
-                    xytext_offset = (-50, -50)  # Position to the left of the x-axis
+                    xytext_offset = (-20, -20)  # Position to the left of the x-axis
                     plt.annotate(f'intensity: {peak["最大值"]:.1f}',
                                 xy=(peak['波段'], peak['最大值']),
                                 xytext=xytext_offset, textcoords='offset points', 
@@ -245,14 +246,11 @@ class OESAnalyzer:
                     marked_peaks.append(peak)
 
             x_ticks = [peak['波段'] for peak in marked_peaks]
-            
             plt.xticks(ticks=x_ticks, labels=[f'{wavelengths1:.1f}nm' for wavelengths1 in x_ticks], rotation=75)        
-            # Add annotations for the top three peak intensities on the y-axis
             
             # 設置圖表屬性
             plt.xlabel('Wavelength(nm)')
             plt.ylabel('Intensity(Cts)')
-            # plt.legend()
             
             # 建構檔案名稱
             output_file_name = f"{file_name}_allspectrum_highestPeaks.png"

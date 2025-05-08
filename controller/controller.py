@@ -2,7 +2,7 @@ import logging
 from model.analyzer import OESAnalyzer
 import pandas as pd
 import os
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -143,9 +143,11 @@ class OESController:
             # Ensure the data for the specific wave exists
             if detect_wave not in self.analyzer._all_data:
                 raise ValueError(f"Wave length {detect_wave} not found in the data.")
+            
             # 1. find active time point and end time point
             activate_time, end_time = self.analyzer.detect_activate_time(detect_wave, threshold, start_index)
-            print(activate_time,end_time)
+            logger.info(f"Activate time: {activate_time}, End time: {end_time}")
+
             if activate_time is None or end_time is None:
                 raise ValueError("Could not detect activation time.")
 
@@ -246,3 +248,44 @@ class OESController:
 
         except Exception as e:
             logger.error(f"Error scanning files in {folder_path}: {e}")
+
+    def analyze_folders(self, selected_folders, detect_wave: float, threshold: float, section_count: int,base_name: str, base_path: str, start_index: int) -> Dict[str, pd.DataFrame]:
+        """分析多個資料夾並返回結果字典。"""
+        analysis_results = {}
+        
+        for index, folder in enumerate(selected_folders):
+            try:
+                logger.info(f"分析第 {index + 1} 筆資料夾: {folder}")
+                
+                # # 使用已存儲的參數
+                # base_name = self.base_names[folder]
+                # start_index = self.start_indices[folder]
+                # end_index = self.end_indices[folder]
+
+                # 加載和處理資料
+                self.load_and_process_data(
+                    base_path=folder,
+                    base_name=base_name,
+                    start_index=start_index,
+                    # end_index=end_index
+                )
+
+                # 調用原有的 analyze_data 方法進行分析
+                results_df = self.analyze_data(
+                    detect_wave=detect_wave,
+                    threshold=threshold,
+                    section_count=section_count,
+                    base_name=base_name,
+                    base_path=folder,
+                    start_index=start_index
+                )
+
+                # 存儲每個資料夾的結果
+                analysis_results[folder] = results_df
+                logger.info(f"資料夾 {folder} 的分析完成。")
+
+            except Exception as e:
+                logger.error(f"分析資料夾 {folder} 時發生錯誤: {e}")
+                analysis_results[folder] = None  # 或者可以存儲錯誤信息
+
+        return analysis_results

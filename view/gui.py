@@ -3,7 +3,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QSpinBox,
     QDoubleSpinBox, QTableWidget, QTableWidgetItem, QMessageBox, QMenu,
-    QTextEdit, QGroupBox , QHeaderView,  QCheckBox, QGridLayout
+    QTextEdit, QGroupBox , QHeaderView,  QCheckBox, QGridLayout, QComboBox,
+    QDialog, QListWidget, QSizePolicy
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
@@ -11,6 +12,13 @@ from controller.controller import OESController
 import pandas as pd
 import os
 from typing import List, Dict
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class OESAnalyzerGUI(QMainWindow):
     """
@@ -23,6 +31,12 @@ class OESAnalyzerGUI(QMainWindow):
         self.controller = OESController()
         self.start_index = 0
         self.end_index = 0
+        self.analysis_results = {}  # Initialize analysis_results to avoid AttributeError
+        self.base_name = ""  # 初始化 base_name
+        self.base_names = {}  # 用於存儲每個資料夾的 base_name
+        self.start_indices = {}  # 用於存儲每個資料夾的 start_index
+        self.end_indices = {}  # 用於存儲每個資料夾的 end_index
+        self.selected_folders = []  # 用於存儲選擇的資料夾
         self.setWindowTitle("OES Analyzer")
 
         # 获取屏幕分辨率
@@ -49,7 +63,7 @@ class OESAnalyzerGUI(QMainWindow):
         self.main_layout.setContentsMargins(10, 10, 10, 10)
         
         #最上方檔案功能
-        self._setup_file_section(self.main_layout)  # 檔案路徑設定
+        # self._setup_OES_file_section(self.main_layout)  # 檔案路徑設定
 
         # 創建一個水平佈局
         self.horizontal_layout = QHBoxLayout()
@@ -68,6 +82,7 @@ class OESAnalyzerGUI(QMainWindow):
         self.horizontal_layout.addWidget(stability_group)
 
         #左邊為光譜分析功能
+        self._setup_OES_file_section(left_layout)  # 檔案路徑設定
         self._setup_save_directory_selection(left_layout) #保存檔案路徑設定
         self._setup_OES_parameters_section(left_layout)  # 參數設定
         self._setup_waveband_settings(left_layout)  # 波段設定
@@ -81,14 +96,16 @@ class OESAnalyzerGUI(QMainWindow):
         self._setup_image_display(left_layout)  # 圖像顯示
 
         # 右側為穩定度分析功能
+        self._setup_stability_file_section(right_layout) # 檔案路徑設定
         self._setup_Stability_analysis_parameters_section(right_layout)  # 參數設定
         self._setup_Stability_analysis_section(right_layout)  # 分析按鈕
         self._setup_results_section(right_layout)  # 結果顯示
 
-    def _setup_file_section(self, parent_layout):
+    def _setup_OES_file_section(self, parent_layout):
         """Create file selection section."""
-        group = QGroupBox("檔案設定")
-        layout = QVBoxLayout()
+        # 光譜分析 GroupBox
+        spectrum_group = QGroupBox("檔案設定")
+        spectrum_layout = QVBoxLayout()
 
         folder_layout = QHBoxLayout()
         self.path_edit = QLineEdit()
@@ -101,12 +118,27 @@ class OESAnalyzerGUI(QMainWindow):
         folder_layout.addWidget(self.path_edit)
         folder_layout.addWidget(browse_button)
 
-        # self.main_layout.addLayout(file_layout)
-        # self.file_info_label = QLabel()
-        # self.main_layout.addWidget(self.file_info_label)
-        layout.addLayout(folder_layout)
-        group.setLayout(layout)
-        parent_layout.addWidget(group)
+        spectrum_layout.addLayout(folder_layout)
+        spectrum_group.setLayout(spectrum_layout)
+        parent_layout.addWidget(spectrum_group)
+        # spectrum_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def _setup_stability_file_section(self, parent_layout):
+        # 穩定度 GroupBox
+        stability_group = QGroupBox("檔案設定")
+        stability_layout = QVBoxLayout()
+
+        folder_browse_button = QPushButton("選擇資料夾")
+        folder_browse_button.clicked.connect(self._browse_folders)
+        stability_layout.addWidget(folder_browse_button)
+
+        self.folder_selector = QComboBox()
+        self.folder_selector.currentIndexChanged.connect(self._update_results_display)
+        stability_layout.addWidget(self.folder_selector)
+
+        stability_layout.addLayout(stability_layout)
+        stability_group.setLayout(stability_layout)
+        parent_layout.addWidget(stability_group)
 
     def _setup_Stability_analysis_parameters_section(self ,parent_layout):
         """Create parameters input section."""
@@ -268,8 +300,18 @@ class OESAnalyzerGUI(QMainWindow):
                                     Qt.TransformationMode.SmoothTransformation)
         self.image_label.setPixmap(scaled_pixmap)
 
-    def _setup_Stability_analysis_section(self ,parent_layout):
-        """Setup the analysis button section."""
+    def _setup_Stability_analysis_section(self, parent_layout):
+        """Setup the analysis button section with folder browsing and selection."""
+        # # Add a folder browsing button
+        # folder_browse_button = QPushButton("選擇資料夾")
+        # folder_browse_button.clicked.connect(self._browse_folders)
+        # parent_layout.addWidget(folder_browse_button)
+
+        # # Add a dropdown for selecting a folder
+        # self.folder_selector = QComboBox()
+        # self.folder_selector.currentIndexChanged.connect(self._update_results_display)
+        # parent_layout.addWidget(self.folder_selector)
+
         analyze_button = QPushButton("穩定度分析")
         analyze_button.clicked.connect(self._analyze_data)
         analyze_button.setStyleSheet("""
@@ -407,35 +449,57 @@ class OESAnalyzerGUI(QMainWindow):
                 QMessageBox.critical(self, "錯誤", str(e))
 
     def _analyze_data(self):
-        """Trigger analysis through the controller."""
+        """Trigger stability analysis through the controller."""
         try:
-            base_path = self.path_edit.text()
-            if not base_path:
-                raise ValueError("請選擇資料夾路徑")
+            if not hasattr(self, 'selected_folders') or not self.selected_folders:
+                raise ValueError("請選擇至少一個資料夾進行分析")
 
             detect_wave = self.detect_wave_spin.value()
             threshold = self.threshold_spin.value()
             section_count = self.section_spin.value()
 
-            self.controller.load_and_process_data(
-                base_path=base_path,
-                base_name= self.base_name,
-                start_index=self.start_index,
-                end_index=self.end_index
-            )
+            # 初始化結果字典
+            self.analysis_results = {}
+            
+            # 對每個資料夾進行分析
+            for index, folder in enumerate(self.selected_folders):
+                base_path = folder
+                if not base_path:
+                    raise ValueError("請選擇資料夾路徑")
+                logger.info(f"分析第 {index + 1} 筆資料夾: {folder}")
+                # 獲取 base_name, start_index, end_index
+                base_name, start_index, end_index = self.controller.scan_file_indices(folder)
+                # logger.info(base_name, start_index, end_index)
+                # 使用原有的方法加載和處理資料
+                self.controller.load_and_process_data(
+                    base_path, 
+                    base_name=base_name, 
+                    start_index=start_index, 
+                    end_index=end_index)
 
-            results_df = self.controller.analyze_data(
-                detect_wave=detect_wave,
-                threshold=threshold,
-                section_count=section_count,
-                base_name=self.base_name,
-                base_path=base_path,
-                start_index= self.start_index
-            )
+                # 調用原有的 analyze_data 方法進行分析
+                results_df = self.controller.analyze_data(
+                    detect_wave=detect_wave,
+                    threshold=threshold,
+                    section_count=section_count,
+                    base_name=base_name,
+                    base_path=base_path,
+                    start_index=start_index
+                )
+                # print(results_df)
+                # 存儲每個資料夾的結果
+                self.analysis_results[folder] = results_df
 
-            self._update_results_table(results_df)
-            QMessageBox.information(self, "成功", "分析完成！")
+             # 更新下拉式選單
+            self.folder_selector.clear()
+            self.folder_selector.addItems([os.path.basename(folder) for folder in self.selected_folders])
 
+            # 更新結果表格，顯示第一個資料夾的結果
+            if self.selected_folders:
+                self._update_results_table(self.analysis_results[self.selected_folders[0]])
+            
+            QMessageBox.information(self, "成功", "所有選擇的資料夾已分析完成！")
+            print(f"分析結果: {self.analysis_results}")
         except Exception as e:
             QMessageBox.critical(self, "錯誤", str(e))
 
@@ -449,12 +513,14 @@ class OESAnalyzerGUI(QMainWindow):
             if not folder_path or not save_folder_path:
                 QMessageBox.warning(self, "警告", "請選擇資料夾路徑和保存路徑")
                 return
+            
             self.controller.load_and_process_data(
                 base_path=folder_path,
-                base_name= self.base_name,
+                base_name=self.base_name,
                 start_index=self.start_index,
                 end_index=self.end_index
             )
+
             base_name = self.base_name
             initial_start = int(self.initial_start.text())
             initial_end = int(self.initial_end.text())
@@ -489,7 +555,10 @@ class OESAnalyzerGUI(QMainWindow):
                 self.filter_checkbox.isChecked(),
                 float(self.intensity_threshold.text()) if self.filter_checkbox.isChecked() else None
             )
-
+            # 檢查 output_path 是否為 None
+            if self.output_path is None:
+                raise ValueError("分析過程中未生成有效的輸出路徑。")
+            
             # 修改圖片名稱以顯示過濾狀態
             if self.filter_checkbox.isChecked():
                 filtered_output_path = self.output_path.replace(".png", "_filtered.png")
@@ -520,12 +589,15 @@ class OESAnalyzerGUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "錯誤", str(e))
 
-    def _update_results_table(self, results_df: pd.DataFrame):
+    def _update_results_table(self, result):
         """Update the results table with analysis data."""
-        self.results_table.setRowCount(len(results_df))
-        for i, row in results_df.iterrows():
-            for j, value in enumerate(row):
-                self.results_table.setItem(i, j, QTableWidgetItem(str(value)))
+        self.results_table.setRowCount(0)  # 清空現有的行
+        for index, row in result.iterrows():
+            row_position = self.results_table.rowCount()
+            self.results_table.insertRow(row_position)
+            for column, data in enumerate(row):
+                self.results_table.setItem(row_position, column, QTableWidgetItem(str(data)))
+
     def _show_context_menu(self, pos):
         """顯示右鍵選單"""
         menu = QMenu()
@@ -541,6 +613,7 @@ class OESAnalyzerGUI(QMainWindow):
             self._copy_row()
         elif action == copy_all_action:
             self._copy_all()
+
     def _copy_cell(self):
         """複製選中儲存格"""
         if self.results_table.currentItem() is not None:
@@ -556,11 +629,18 @@ class OESAnalyzerGUI(QMainWindow):
             for col in range(self.results_table.columnCount()):
                 item = self.results_table.item(current_row, col)
                 if item is not None:
-                    row_data.append(item.text())
+                    # 只添加數值內容
+                    try:
+                        # 嘗試將文本轉換為浮點數
+                        value = float(item.text())
+                        row_data.append(str(value))
+                    except ValueError:
+                        # 如果轉換失敗，跳過該項
+                        continue
             
             clipboard = QApplication.clipboard()
             clipboard.setText('\t'.join(row_data))
-            QMessageBox.information(self, "複製成功", "已複製整行內容")
+            QMessageBox.information(self, "複製成功", "已複製整行數值內容")
 
     def _copy_all(self):
         """複製全部內容"""
@@ -583,6 +663,93 @@ class OESAnalyzerGUI(QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setText('\n'.join(all_data))
         QMessageBox.information(self, "複製成功", "已複製全部內容")
+
+    def _browse_folders(self):
+        """Handle folder browsing action for stability analysis using custom dialog."""
+        dialog = MultiFolderDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.selected_folders = dialog.get_selected_folders()
+            self.folder_selector.clear()
+            self.folder_selector.addItems([os.path.basename(folder) for folder in self.selected_folders])
+            
+            # 對每個選擇的資料夾進行掃描以獲取 base_name, start_index, end_index
+            for folder in self.selected_folders:
+                try:
+                    base_name, start_index, end_index = self.controller.scan_file_indices(folder)
+                    # 可以將這些值存儲在一個字典中以便後續使用
+                    self.base_names[folder] = base_name
+                    self.start_indices[folder] = start_index
+                    self.end_indices[folder] = end_index
+                except Exception as e:
+                    QMessageBox.critical(self, "錯誤", f"在資料夾 {folder} 中掃描檔案時發生錯誤: {str(e)}")
+
+            QMessageBox.information(self, "成功", f"已選擇 {len(self.selected_folders)} 個資料夾進行分析")
+
+    def _update_results_display(self):
+        """Update the results table based on the selected folder."""
+        selected_folder = self.folder_selector.currentText()  # 獲取選擇的資料夾名稱
+        folder_path = next((folder for folder in self.selected_folders if os.path.basename(folder) == selected_folder), None)
+        if folder_path and folder_path in self.analysis_results:
+            result = self.analysis_results[folder_path]  # 獲取對應的分析結果
+            self._update_results_table(result)  # 更新結果表格
+        else:
+            QMessageBox.warning(self, "警告", "未找到選擇的資料夾分析結果")
+
+class MultiFolderDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("選擇多個資料夾")
+        self.setMinimumSize(400, 300)
+
+        self.layout = QVBoxLayout(self)
+
+        # List to display selected folders
+        self.folder_list = QListWidget()
+        self.folder_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.layout.addWidget(self.folder_list)
+
+        # Button to add folders
+        self.add_button = QPushButton("添加資料夾")
+        self.add_button.clicked.connect(self.add_folder)
+        self.layout.addWidget(self.add_button)
+
+        # Button to remove selected folders
+        self.remove_button = QPushButton("刪除選中資料夾")
+        self.remove_button.clicked.connect(self.remove_selected_folders)
+        self.layout.addWidget(self.remove_button)
+
+        # Button to confirm selection
+        self.confirm_button = QPushButton("確認")
+        self.confirm_button.clicked.connect(self.accept)
+        self.layout.addWidget(self.confirm_button)
+
+    def add_folder(self):
+        """Open a dialog to select a folder and add its parent folder's contents to the list."""
+        folder = QFileDialog.getExistingDirectory(self, "選擇資料夾", "", QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontUseNativeDialog)
+        if folder:
+            parent_folder = os.path.dirname(folder)
+            try:
+                subfolders = [os.path.join(parent_folder, f) for f in os.listdir(parent_folder) if os.path.isdir(os.path.join(parent_folder, f))]
+                for subfolder in subfolders:
+                    if subfolder not in [self.folder_list.item(i).text() for i in range(self.folder_list.count())]:
+                        self.folder_list.addItem(subfolder)
+            except Exception as e:
+                QMessageBox.critical(self, "錯誤", f"無法讀取資料夾內容: {str(e)}")
+
+    def remove_selected_folders(self):
+        """Remove selected folders from the list."""
+        selected_items = self.folder_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "警告", "請選擇要刪除的資料夾")
+            return
+        
+        for item in selected_items:
+            self.folder_list.takeItem(self.folder_list.row(item))
+
+    def get_selected_folders(self):
+        """Return a list of selected folders."""
+        return [self.folder_list.item(i).text() for i in range(self.folder_list.count())]
+    
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     gui = OESAnalyzerGUI()
