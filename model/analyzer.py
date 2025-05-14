@@ -242,15 +242,34 @@ class OESAnalyzer:
                                 xy=(peak['波段'], peak['最大值']),
                                 xytext=xytext_offset, textcoords='offset points', 
                                 arrowprops=dict(arrowstyle='->', lw=1.5, linestyle='dashed'),
-                                rotation=rotation_angle)  # 根據條件設置旋轉角度
+                                rotation=rotation_angle,
+                                color='red')  # 設置標註文字為紅色
                     marked_peaks.append(peak)
 
-            x_ticks = [peak['波段'] for peak in marked_peaks]
-            plt.xticks(ticks=x_ticks, labels=[f'{wavelengths1:.1f}nm' for wavelengths1 in x_ticks], rotation=75)        
+            # 設置X軸刻度，每200nm一個標示
+            min_wavelength = min(wavelengths1)
+            max_wavelength = max(wavelengths1)
+            x_ticks = list(range(int(min_wavelength), int(max_wavelength) + 200, 200))
+            
+            # 創建兩個軸，一個用於200nm間隔的刻度，一個用於峰值標記
+            ax1 = plt.gca()
+            ax2 = ax1.twiny()  # 創建第二個X軸
+            
+            # 設置第一個軸（200nm間隔）
+            ax1.set_xticks(x_ticks)
+            ax1.set_xticklabels([f'{x}nm' for x in x_ticks], rotation=75)
+            
+            # 設置第二個軸（峰值標記）
+            peak_ticks = [peak['波段'] for peak in marked_peaks]
+            ax2.set_xticks(peak_ticks)
+            ax2.set_xticklabels([f'{x:.1f}nm' for x in peak_ticks], rotation=75, color='red')
+            
+            # 調整第二個軸的位置
+            ax2.spines['top'].set_position(('outward', 30))
             
             # 設置圖表屬性
-            plt.xlabel('Wavelength(nm)')
-            plt.ylabel('Intensity(Cts)')
+            ax1.set_xlabel('Wavelength(nm)')
+            ax1.set_ylabel('Intensity(Cts)')
             
             # 建構檔案名稱
             output_file_name = f"{file_name}_allspectrum_highestPeaks.png"

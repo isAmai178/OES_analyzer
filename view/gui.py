@@ -13,6 +13,11 @@ import pandas as pd
 import os
 from typing import List, Dict
 import logging
+import matplotlib
+matplotlib.use('Qt5Agg')  # 設置 matplotlib 後端
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -604,6 +609,8 @@ class OESAnalyzerGUI(QMainWindow):
         copy_cell_action = menu.addAction("複製當前儲存格")
         copy_row_action = menu.addAction("複製當前行")
         copy_all_action = menu.addAction("複製全部")
+        plot_intensity_action = menu.addAction("生成強度圖")
+        view_plot_action = menu.addAction("直接查看圖表")
         
         action = menu.exec(self.results_table.mapToGlobal(pos))
         
@@ -613,6 +620,10 @@ class OESAnalyzerGUI(QMainWindow):
             self._copy_row()
         elif action == copy_all_action:
             self._copy_all()
+        elif action == plot_intensity_action:
+            self._generate_intensity_plot()
+        elif action == view_plot_action:
+            self._view_intensity_plot()
 
     def _copy_cell(self):
         """複製選中儲存格"""
@@ -663,6 +674,204 @@ class OESAnalyzerGUI(QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setText('\n'.join(all_data))
         QMessageBox.information(self, "複製成功", "已複製全部內容")
+
+    def _generate_intensity_plot(self):
+        """生成選中波段的強度圖"""
+        try:
+            # 獲取當前選中的資料夾
+            selected_folder = self.folder_selector.currentText()
+            folder_path = next((folder for folder in self.selected_folders if os.path.basename(folder) == selected_folder), None)
+            
+            if not folder_path:
+                QMessageBox.warning(self, "警告", "請先選擇一個資料夾")
+                return
+
+            # 獲取檢測波長
+            detect_wave = self.detect_wave_spin.value()
+            
+            # 獲取保存路徑
+            save_dir = QFileDialog.getExistingDirectory(self, '選擇保存位置')
+            if not save_dir:
+                return
+
+            # 生成圖表
+            plt.figure(figsize=(10, 6))
+            
+            # 讀取所有檔案並繪製強度圖
+            files = os.listdir(folder_path)
+            spectrum_files = [f for f in files if f.endswith('.txt') and f.startswith(self.base_names[folder_path])]
+            
+            times = []
+            intensities = []
+            
+            for file_name in sorted(spectrum_files):
+                try:
+                    file_path = os.path.join(folder_path, file_name)
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        for line in file:
+                            parts = line.strip().split(';')
+                            if len(parts) > 1:
+                                try:
+                                    wave = float(parts[0])
+                                    if abs(wave - detect_wave) < 0.1:  # 允許0.1nm的誤差
+                                        time_point = int(file_name.split('_S')[-1].split('.')[0])
+                                        intensity = float(parts[1])
+                                        times.append(time_point)
+                                        intensities.append(intensity)
+                                        break
+                                except ValueError:
+                                    continue
+                except Exception as e:
+                    logger.error(f"Error processing file {file_name}: {e}")
+                    continue
+
+            if not times:
+                QMessageBox.warning(self, "警告", f"在波長 {detect_wave}nm 處未找到數據")
+                return
+
+            # 繪製圖表
+            plt.plot(times, intensities, 'b-', linewidth=2)
+            plt.title(f'{detect_wave}nm intensity change')
+            plt.xlabel('Time point')
+            plt.ylabel('Intensity (a.u.)')
+            plt.grid(True)
+
+            # 保存圖表
+            output_path = os.path.join(save_dir, f'intensity_plot_{detect_wave}nm.png')
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            QMessageBox.information(self, "成功", f"強度圖已保存至：{output_path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"生成強度圖時發生錯誤: {str(e)}")
+
+    def _view_intensity_plot(self):
+        """直接查看強度圖"""
+        try:
+            # 獲取當前選中的資料夾
+            selected_folder = self.folder_selector.currentText()
+            folder_path = next((folder for folder in self.selected_folders if os.path.basename(folder) == selected_folder), None)
+            
+            if not folder_path:
+                QMessageBox.warning(self, "警告", "請先選擇一個資料夾")
+                return
+
+            # 獲取檢測波長
+            detect_wave = self.detect_wave_spin.value()
+            
+            # 讀取所有檔案並繪製強度圖
+            files = os.listdir(folder_path)
+            spectrum_files = [f for f in files if f.endswith('.txt') and f.startswith(self.base_names[folder_path])]
+            
+            times = []
+            intensities = []
+            
+            for file_name in sorted(spectrum_files):
+                try:
+                    file_path = os.path.join(folder_path, file_name)
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        for line in file:
+                            parts = line.strip().split(';')
+                            if len(parts) > 1:
+                                try:
+                                    wave = float(parts[0])
+                                    if abs(wave - detect_wave) < 0.1:  # 允許0.1nm的誤差
+                                        time_point = int(file_name.split('_S')[-1].split('.')[0])
+                                        intensity = float(parts[1])
+                                        times.append(time_point)
+                                        intensities.append(intensity)
+                                        break
+                                except ValueError:
+                                    continue
+                except Exception as e:
+                    logger.error(f"Error processing file {file_name}: {e}")
+                    continue
+
+            if not times:
+                QMessageBox.warning(self, "警告", f"在波長 {detect_wave}nm 處未找到數據")
+                return
+
+            # 創建一個新的窗口來顯示圖表
+            plot_window = QDialog(self)  # 使用 QDialog 而不是 QWidget
+            plot_window.setWindowTitle(f'Intensity Plot - {detect_wave}nm')
+            plot_window.setModal(False)  # 設置為非模態對話框
+            layout = QVBoxLayout(plot_window)
+
+            # 創建新的figure
+            fig = Figure(figsize=(10, 6))
+            canvas = FigureCanvas(fig)
+            ax = fig.add_subplot(111)
+            
+            # 繪製圖表
+            ax.plot(times, intensities, 'b-', linewidth=2)
+            ax.set_title(f'{detect_wave}nm intensity change')
+            ax.set_xlabel('Time point')
+            ax.set_ylabel('Intensity (a.u.)')
+            ax.grid(True)
+            
+            # 調整布局
+            fig.tight_layout()
+            
+            # 添加畫布到布局
+            layout.addWidget(canvas)
+
+            # 創建按鈕布局
+            button_layout = QHBoxLayout()
+            
+            # 添加保存按鈕
+            save_button = QPushButton("保存圖表")
+            save_button.clicked.connect(lambda: self._save_plot(fig))
+            button_layout.addWidget(save_button)
+            
+            # 添加關閉按鈕
+            close_button = QPushButton("關閉")
+            close_button.clicked.connect(plot_window.close)
+            button_layout.addWidget(close_button)
+            
+            # 添加按鈕布局到主布局
+            layout.addLayout(button_layout)
+
+            # 設置窗口大小
+            plot_window.resize(800, 600)
+            
+            # 保持對figure的引用，防止被垃圾回收
+            plot_window.figure = fig
+            plot_window.canvas = canvas
+            
+            # 顯示窗口
+            plot_window.show()
+            
+            # 確保窗口在最前面
+            plot_window.raise_()
+            plot_window.activateWindow()
+
+        except Exception as e:
+            logger.error(f"生成強度圖時發生錯誤: {str(e)}")
+            QMessageBox.critical(self, "錯誤", f"生成強度圖時發生錯誤: {str(e)}")
+
+    def _save_plot(self, figure):
+        """保存圖表"""
+        try:
+            save_dir = QFileDialog.getExistingDirectory(self, '選擇保存位置')
+            if not save_dir:
+                return
+
+            # 獲取當前選中的資料夾名稱
+            selected_folder = self.folder_selector.currentText()
+            folder_name = os.path.basename(selected_folder)
+            
+            # 獲取檢測波長
+            detect_wave = self.detect_wave_spin.value()
+            
+            # 生成包含更多信息的文件名
+            timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+            output_path = os.path.join(save_dir, f'{folder_name}_{detect_wave}nm_{timestamp}.png')
+            
+            figure.savefig(output_path, dpi=300, bbox_inches='tight')
+            QMessageBox.information(self, "成功", f"強度圖已保存至：{output_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"保存圖表時發生錯誤: {str(e)}")
 
     def _browse_folders(self):
         """Handle folder browsing action for stability analysis using custom dialog."""
