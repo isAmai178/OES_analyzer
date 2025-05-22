@@ -125,7 +125,7 @@ class OESController:
         except Exception as e:
             logger.error(f"Error finding spectrum files: {e}")
             return None, None, None
-    def analyze_data(self, detect_wave: float, threshold: float, section_count: int,base_name: str, base_path: str, start_index: int ) -> pd.DataFrame:
+    def analyze_data(self, detect_wave: float, threshold: float, section_count: int,base_name: str, base_path: str, start_index: int ) -> Tuple[pd.DataFrame, int, int]:
         """
         Analyze the processed data and return a DataFrame of results.
 
@@ -135,7 +135,10 @@ class OESController:
             section_count: Number of sections for analysis.
 
         Returns:
-            DataFrame containing the analysis results.
+            Tuple containing:
+            - DataFrame containing the analysis results
+            - Activation time
+            - End time
         """
         try:
             logger.info("Detecting activation and analyzing data...")
@@ -152,7 +155,7 @@ class OESController:
                 raise ValueError("Could not detect activation time.")
 
             # 2. read data of active time period 
-            activate_time_file = self.analyzer.generate_file_names(base_name, activate_time + 10, end_time - 10)
+            activate_time_file = self.analyzer.generate_file_names(base_name, activate_time + 3, end_time - 3)
             activate_time_data = self.analyzer.read_file_to_data(activate_time_file, base_path)
 
             wave_data = activate_time_data[detect_wave]
@@ -161,34 +164,54 @@ class OESController:
             # Store and return results
             self.analysis_results = self.analyzer.prepare_results_dataframe(sectioned_data)
             logger.info("Data analysis completed successfully.")
-            return self.analysis_results
+            return self.analysis_results, activate_time, end_time
 
         except Exception as e:
             logger.error(f"Error during data analysis: {e}")
             raise
 
-    def save_results_to_excel(self, base_path: str, threshold: float, base_name: str) -> None:
+    def save_results_to_excel(self, base_path: str, threshold: float, selected_folders=None) -> None:
         """
-        Save the analysis results to an Excel file.
-
+        Save all analysis results to a single Excel file, all in one sheet, with experiment label.
         Args:
             base_path: Directory where the results should be saved.
             threshold: Threshold value used in the analysis (included in file naming).
-
+            selected_folders: List of folders in分析順序 (for Exp.1, Exp.2...)
         Returns:
             None
         """
         try:
-            if self.analysis_results is None:
-                raise ValueError("No analysis results to save. Please run the analysis first.")
+            # 檢查 analysis_results 是否為 dict
+            if not isinstance(self.analysis_results, dict) or not self.analysis_results:
+                logger.warning("目前沒有分析結果可儲存。")
+                return
 
-            excel_path = os.path.join(base_path, f'{base_name}.xlsx')
+            excel_path = os.path.join(base_path, '穩定性分析檔案.xlsx')
 
+            # 欄位順序與 GUI 一致
+            columns = ['實驗', '區段', '平均值', '標準差', '變異數', '穩定度']
+            all_rows = []
+            exp_labels = []
+            if selected_folders is None:
+                selected_folders = list(self.analysis_results.keys())
+            for idx, folder in enumerate(selected_folders):
+                df = self.analysis_results.get(folder)
+                if df is None or df.empty:
+                    continue
+                exp_label = f"Exp.{idx+1}"
+                for _, row in df.iterrows():
+                    all_rows.append([
+                        exp_label,
+                        row['區段'],
+                        row['平均值'],
+                        row['標準差'],
+                        row['變異數'],
+                        row['穩定度']
+                    ])
+            out_df = pd.DataFrame(all_rows, columns=columns)
             with pd.ExcelWriter(excel_path) as writer:
-                self.analysis_results.to_excel(writer, sheet_name=f"Threshold_{threshold}", index=False)
-
+                out_df.to_excel(writer, sheet_name=f"Threshold_{threshold}", index=False)
             logger.info(f"Results successfully saved to {excel_path}")
-
         except Exception as e:
             logger.error(f"Error saving results to Excel: {e}")
             raise
@@ -271,7 +294,7 @@ class OESController:
                 )
 
                 # 調用原有的 analyze_data 方法進行分析
-                results_df = self.analyze_data(
+                results_df, activate_time, end_time = self.analyze_data(
                     detect_wave=detect_wave,
                     threshold=threshold,
                     section_count=section_count,

@@ -207,7 +207,15 @@ class OESAnalyzer:
             # 找出每個數據集的最大值點
             peaks1 = self.find_peak_points(data1)
 
+            # 如果啟用了濾波，過濾掉低於閾值的峰值
+            if intensity_threshold is not None:
+                peaks1 = [peak for peak in peaks1 if peak['最大值'] > intensity_threshold]
+
             # 取得最大值的波長
+            if not peaks1:  # 如果沒有符合條件的峰值
+                logger.warning("沒有找到符合強度閾值的峰值")
+                return None
+
             max_peak1 = peaks1[0]  # 已經按最大值排序，所以第一個就是最大的
             sorted_peaks = sorted(peaks1, key=lambda x: x['最大值'], reverse=True)
 
@@ -218,58 +226,55 @@ class OESAnalyzer:
             # 創建圖表
             plt.figure(figsize=(10, 6))
 
-            # 添加最大值波段信息到標題
-            title_text = (f'ALL_Spectrum & Higher Peaks \n'
-                        f'Max_peak: {peaks1[0]["波段"]:.1f}nm')
-            plt.title(title_text)
-            
             # 繪製線條
             plt.plot(wavelengths1, y1, color='red', label='Highest_data', linewidth=1)
 
             marked_peaks = []
-            for index, peak in enumerate(peaks1):
+            for peak in sorted_peaks:
                 if len(marked_peaks) >= 3:
                     break
-                
                 # 檢查是否需要跳過範圍
                 if not any(abs(peak['波段'] - marked_peak['波段']) <= skip_range_nm for marked_peak in marked_peaks):
-                    # 調整標註位置以避免重疊
-                    offset = len(marked_peaks) * 10  # 根據已標註的數量調整偏移量
-                    rotation_angle = 0
-                    # Adjust annotation to connect to the left side of the x-axis with dashed lines
-                    xytext_offset = (-20, -20)  # Position to the left of the x-axis
-                    plt.annotate(f'intensity: {peak["最大值"]:.1f}',
-                                xy=(peak['波段'], peak['最大值']),
-                                xytext=xytext_offset, textcoords='offset points', 
-                                arrowprops=dict(arrowstyle='->', lw=1.5, linestyle='dashed'),
-                                rotation=rotation_angle,
-                                color='red')  # 設置標註文字為紅色
-                    marked_peaks.append(peak)
+                    # 只標註高於閾值的波段
+                    if intensity_threshold is None or peak['最大值'] > intensity_threshold:
+                        plt.annotate(
+                            f'intensity: {peak["最大值"]:.1f}',
+                            xy=(peak['波段'], peak['最大值']),
+                            xytext=(-20, -20), textcoords='offset points',
+                            arrowprops=dict(arrowstyle='->', lw=1.5, linestyle='dashed'),
+                            color='red'
+                        )
+                        marked_peaks.append(peak)
 
-            # 設置X軸刻度，每200nm一個標示
-            min_wavelength = min(wavelengths1)
-            max_wavelength = max(wavelengths1)
-            x_ticks = list(range(int(min_wavelength), int(max_wavelength) + 200, 200))
+            # 標題只顯示高於閾值的前三強
+            peak_values = [f"{peak['波段']:.1f}nm" for peak in marked_peaks]
+            title_text = f'ALL_Spectrum & Higher Peaks\nTop 3 Peaks: {", ".join(peak_values)}'
+            plt.title(title_text)
+
+            # 設置X軸刻度，從195nm到1100nm，每100nm一個標示
+            x_ticks = list(range(195, 1101, 100))
+            plt.xticks(x_ticks, [f'{x}nm' for x in x_ticks], rotation=75)
             
-            # 創建兩個軸，一個用於200nm間隔的刻度，一個用於峰值標記
-            ax1 = plt.gca()
-            ax2 = ax1.twiny()  # 創建第二個X軸
+            # 設置Y軸刻度
+            # 獲取當前Y軸的範圍
+            y_min, y_max = plt.ylim()
+            # 計算Y軸刻度的範圍（向上取整到最接近的500的倍數）
+            y_max = ((int(y_max) + 499) // 500) * 500
+            y_min = (int(y_min) // 500) * 500
             
-            # 設置第一個軸（200nm間隔）
-            ax1.set_xticks(x_ticks)
-            ax1.set_xticklabels([f'{x}nm' for x in x_ticks], rotation=75)
+            # 設置主刻度（每500一個）
+            major_ticks = list(range(y_min, y_max + 500, 500))
+            # 設置次刻度（每100一個）
+            minor_ticks = list(range(y_min, y_max + 100, 100))
             
-            # 設置第二個軸（峰值標記）
-            peak_ticks = [peak['波段'] for peak in marked_peaks]
-            ax2.set_xticks(peak_ticks)
-            ax2.set_xticklabels([f'{x:.1f}nm' for x in peak_ticks], rotation=75, color='red')
-            
-            # 調整第二個軸的位置
-            ax2.spines['top'].set_position(('outward', 30))
+            # 設置主刻度和標籤
+            plt.yticks(major_ticks, [f'{x}' for x in major_ticks])
+            # 設置次刻度（不顯示標籤）
+            plt.yticks(minor_ticks, minor=True)
             
             # 設置圖表屬性
-            ax1.set_xlabel('Wavelength(nm)')
-            ax1.set_ylabel('Intensity(Cts)')
+            plt.xlabel('Wavelength(nm)')
+            plt.ylabel('Intensity(Cts)')
             
             # 建構檔案名稱
             output_file_name = f"{file_name}_allspectrum_highestPeaks.png"
@@ -300,6 +305,8 @@ class OESAnalyzer:
         section_size = len(wave_data) // section
         sectioned_data = {}
 
+        total_mean = np.mean(wave_data)  # 全部平均值
+
         # Analyze individual sections
         for i in range(section):
             start_idx = i * section_size
@@ -308,23 +315,25 @@ class OESAnalyzer:
 
             std_value = np.std(section_wave_data)
             average_value = np.mean(section_wave_data)
-            stability = round((std_value / average_value) * 100, 3)
+            variance = round((std_value / total_mean), 6)  # 變異數，不乘100%
+            stability_inv = round(100 - (std_value / total_mean) * 100, 3)  # 穩定度
 
             sectioned_data[f'區段{i+1}'] = {
                 'mean': average_value,
                 'std': std_value,
-                '穩定度': stability
+                '變異數': variance,
+                '穩定度': stability_inv
             }
 
         # Analyze total section
-        total_mean = np.mean(wave_data)
         total_std = np.std(wave_data)
-        total_stability = round((total_std / total_mean) * 100, 3)
-
+        total_variance = round((total_std / total_mean), 6)
+        total_stability_inv = round(100 - (total_std / total_mean) * 100, 3)
         sectioned_data['總區段'] = {
             'mean': total_mean,
             'std': total_std,
-            '穩定度': total_stability
+            '變異數': total_variance,
+            '穩定度': total_stability_inv
         }
 
         return sectioned_data
@@ -407,10 +416,11 @@ class OESAnalyzer:
                 section_name,
                 stats['mean'],
                 stats['std'],
+                stats['變異數'],
                 stats['穩定度']
             ])
 
-        return pd.DataFrame(results, columns=['區段', '平均值', '標準差', '穩定度'])
+        return pd.DataFrame(results, columns=['區段', '平均值', '標準差', '變異數', '穩定度'])
 
     def detect_activate_time(self, max_wave: float, threshold: float, start_index: int) -> Tuple[Optional[int], Optional[int]]:
         """

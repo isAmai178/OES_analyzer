@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QFileDialog, QSpinBox,
     QDoubleSpinBox, QTableWidget, QTableWidgetItem, QMessageBox, QMenu,
     QTextEdit, QGroupBox , QHeaderView,  QCheckBox, QGridLayout, QComboBox,
-    QDialog, QListWidget, QSizePolicy
+    QDialog, QListWidget, QSizePolicy, QProgressDialog
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
@@ -18,6 +18,7 @@ matplotlib.use('Qt5Agg')  # 設置 matplotlib 後端
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import numpy as np
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -353,12 +354,42 @@ class OESAnalyzerGUI(QMainWindow):
 
     def _setup_results_section(self ,parent_layout):
         """Create results display section."""
+        # 創建一個水平佈局來放置表格和圖表
+        results_layout = QHBoxLayout()
+        
+        # 左側表格
+        table_layout = QVBoxLayout()
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(4)
-        self.results_table.setHorizontalHeaderLabels(["區段", "平均值", "標準差", "穩定度"])
-        self.results_table.setSizeAdjustPolicy(QTableWidget.SizeAdjustPolicy.AdjustToContents)
-        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        parent_layout.addWidget(self.results_table)
+        self.results_table.setColumnCount(5)
+        self.results_table.setHorizontalHeaderLabels(["區段", "平均值", "標準差", "變異數", "穩定度"])
+        
+        # 設置表格大小策略
+        self.results_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        # 設置表格的最小大小
+        self.results_table.setMinimumWidth(400)
+        self.results_table.setMinimumHeight(300)
+        
+        # 設置表格的調整策略
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)  # 允許手動調整列寬
+        self.results_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)    # 允許手動調整行高
+        
+        # 設置初始列寬
+        self.results_table.setColumnWidth(0, 100)  # 區段
+        self.results_table.setColumnWidth(1, 100)  # 平均值
+        self.results_table.setColumnWidth(2, 100)  # 標準差
+        self.results_table.setColumnWidth(3, 100)  # 變異數
+        self.results_table.setColumnWidth(4, 100)  # 穩定度
+        
+        # 啟用表格的拖動調整功能
+        self.results_table.horizontalHeader().setSectionsMovable(True)  # 允許拖動調整列順序
+        
+        table_layout.addWidget(self.results_table)
+        
+        # 添加時間信息標籤
+        self.time_info_label = QLabel()
+        self.time_info_label.setStyleSheet("QLabel { color: #666; font-size: 12px; }")
+        table_layout.addWidget(self.time_info_label)
         
         # 啟用右鍵選單
         self.results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -366,7 +397,23 @@ class OESAnalyzerGUI(QMainWindow):
         
         save_btn = QPushButton('儲存結果')
         save_btn.clicked.connect(self._save_results)
-        parent_layout.addWidget(save_btn)
+        table_layout.addWidget(save_btn)
+        
+        # 右側圖表
+        plot_layout = QVBoxLayout()
+        self.plot_canvas = FigureCanvas(Figure(figsize=(5, 4)))
+        plot_layout.addWidget(self.plot_canvas)
+        
+        plot_btn = QPushButton('更新Error Bar圖表')
+        plot_btn.clicked.connect(self._update_error_bar_plot)
+        plot_layout.addWidget(plot_btn)
+        
+        # 將左右兩側添加到水平佈局
+        results_layout.addLayout(table_layout)
+        results_layout.addLayout(plot_layout)
+        
+        # 將水平佈局添加到父佈局
+        parent_layout.addLayout(results_layout)
 
     def _setup_save_directory_selection(self, parent_layout):
             group = QGroupBox("保存路徑設定")
@@ -465,46 +512,90 @@ class OESAnalyzerGUI(QMainWindow):
 
             # 初始化結果字典
             self.analysis_results = {}
+            self.time_info = {}  # 新增：用於存儲時間信息
+            failed_folders = []  # 用於存儲分析失敗的資料夾
+            
+            # 創建進度對話框
+            progress = QProgressDialog("正在分析資料夾...", "取消", 0, len(self.selected_folders), self)
+            progress.setWindowTitle("分析進度")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)  # 立即顯示進度對話框
             
             # 對每個資料夾進行分析
             for index, folder in enumerate(self.selected_folders):
-                base_path = folder
-                if not base_path:
-                    raise ValueError("請選擇資料夾路徑")
-                logger.info(f"分析第 {index + 1} 筆資料夾: {folder}")
-                # 獲取 base_name, start_index, end_index
-                base_name, start_index, end_index = self.controller.scan_file_indices(folder)
-                # logger.info(base_name, start_index, end_index)
-                # 使用原有的方法加載和處理資料
-                self.controller.load_and_process_data(
-                    base_path, 
-                    base_name=base_name, 
-                    start_index=start_index, 
-                    end_index=end_index)
+                # 更新進度對話框
+                progress.setValue(index)
+                progress.setLabelText(f"正在分析第 {index + 1}/{len(self.selected_folders)} 個資料夾:\n{os.path.basename(folder)}")
+                
+                # 檢查是否取消
+                if progress.wasCanceled():
+                    QMessageBox.warning(self, "警告", "分析已被使用者取消")
+                    return
+                
+                try:
+                    base_path = folder
+                    if not base_path:
+                        raise ValueError("請選擇資料夾路徑")
+                    logger.info(f"分析第 {index + 1} 筆資料夾: {folder}")
+                    # 獲取 base_name, start_index, end_index
+                    base_name, start_index, end_index = self.controller.scan_file_indices(folder)
+                    # 使用原有的方法加載和處理資料
+                    self.controller.load_and_process_data(
+                        base_path, 
+                        base_name=base_name, 
+                        start_index=start_index, 
+                        end_index=end_index)
 
-                # 調用原有的 analyze_data 方法進行分析
-                results_df = self.controller.analyze_data(
-                    detect_wave=detect_wave,
-                    threshold=threshold,
-                    section_count=section_count,
-                    base_name=base_name,
-                    base_path=base_path,
-                    start_index=start_index
-                )
-                # print(results_df)
-                # 存儲每個資料夾的結果
-                self.analysis_results[folder] = results_df
+                    # 調用原有的 analyze_data 方法進行分析
+                    results_df, activate_time, end_time = self.controller.analyze_data(
+                        detect_wave=detect_wave,
+                        threshold=threshold,
+                        section_count=section_count,
+                        base_name=base_name,
+                        base_path=base_path,
+                        start_index=start_index
+                    )
+                    # 存儲每個資料夾的結果
+                    self.analysis_results[folder] = results_df
+                    # 存儲時間信息
+                    self.time_info[folder] = (activate_time, end_time)
+                except Exception as e:
+                    logger.error(f"分析資料夾 {folder} 時發生錯誤: {str(e)}")
+                    failed_folders.append((folder, str(e)))
+                    continue
 
-             # 更新下拉式選單
+            # 完成進度對話框
+            progress.setValue(len(self.selected_folders))
+
+            # 更新下拉式選單，只顯示成功分析的資料夾
+            self.folder_selector.blockSignals(True)
             self.folder_selector.clear()
-            self.folder_selector.addItems([os.path.basename(folder) for folder in self.selected_folders])
+            self.folder_selector.addItems([os.path.basename(folder) for folder in self.selected_folders if folder not in [f[0] for f in failed_folders]])
+            self.folder_selector.blockSignals(False)
 
-            # 更新結果表格，顯示第一個資料夾的結果
+            # 更新結果表格，顯示第一個成功分析的資料夾的結果
             if self.selected_folders:
-                self._update_results_table(self.analysis_results[self.selected_folders[0]])
+                first_successful_folder = next((folder for folder in self.selected_folders if os.path.basename(folder) == self.folder_selector.currentText()), None)
+                if first_successful_folder:
+                    self._update_results_table(self.analysis_results[first_successful_folder])
+                    # 更新時間信息
+                    if first_successful_folder in self.time_info:
+                        activate_time, end_time = self.time_info[first_successful_folder]
+                        self.time_info_label.setText(f"Activation Time: {activate_time}, End Time: {end_time}")
             
-            QMessageBox.information(self, "成功", "所有選擇的資料夾已分析完成！")
-            print(f"分析結果: {self.analysis_results}")
+            # 顯示分析結果摘要
+            success_count = len(self.selected_folders) - len(failed_folders)
+            fail_count = len(failed_folders)
+            
+            message = f"分析完成！\n成功分析: {success_count} 個資料夾\n"
+            if fail_count > 0:
+                message += f"\n分析失敗: {fail_count} 個資料夾\n"
+                message += "\n失敗的資料夾列表：\n"
+                for folder, error in failed_folders:
+                    message += f"- {os.path.basename(folder)}: {error}\n"
+            
+            QMessageBox.information(self, "分析結果摘要", message)
+            
         except Exception as e:
             QMessageBox.critical(self, "錯誤", str(e))
 
@@ -567,6 +658,9 @@ class OESAnalyzerGUI(QMainWindow):
             # 修改圖片名稱以顯示過濾狀態
             if self.filter_checkbox.isChecked():
                 filtered_output_path = self.output_path.replace(".png", "_filtered.png")
+                # 如果檔案已存在，直接覆蓋
+                if os.path.exists(filtered_output_path):
+                    os.remove(filtered_output_path)
                 os.rename(self.output_path, filtered_output_path)
                 self.output_path = filtered_output_path
 
@@ -588,7 +682,7 @@ class OESAnalyzerGUI(QMainWindow):
             if not save_dir:
                 raise ValueError("請選擇資料夾路徑")        
 
-            self.controller.save_results_to_excel(save_dir, self.threshold_spin.value(),self.base_name)
+            self.controller.save_results_to_excel(save_dir, self.threshold_spin.value(), self.selected_folders)
             QMessageBox.information(self, "成功", "結果已儲存！")
 
         except Exception as e:
@@ -609,8 +703,8 @@ class OESAnalyzerGUI(QMainWindow):
         copy_cell_action = menu.addAction("複製當前儲存格")
         copy_row_action = menu.addAction("複製當前行")
         copy_all_action = menu.addAction("複製全部")
-        plot_intensity_action = menu.addAction("生成強度圖")
-        view_plot_action = menu.addAction("直接查看圖表")
+        # plot_intensity_action = menu.addAction("儲存單波強度圖")
+        view_plot_action = menu.addAction("查看強度圖")
         
         action = menu.exec(self.results_table.mapToGlobal(pos))
         
@@ -620,8 +714,8 @@ class OESAnalyzerGUI(QMainWindow):
             self._copy_row()
         elif action == copy_all_action:
             self._copy_all()
-        elif action == plot_intensity_action:
-            self._generate_intensity_plot()
+        # elif action == plot_intensity_action:
+        #     self._generate_intensity_plot()
         elif action == view_plot_action:
             self._view_intensity_plot()
 
@@ -878,8 +972,10 @@ class OESAnalyzerGUI(QMainWindow):
         dialog = MultiFolderDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.selected_folders = dialog.get_selected_folders()
+            self.folder_selector.blockSignals(True)
             self.folder_selector.clear()
             self.folder_selector.addItems([os.path.basename(folder) for folder in self.selected_folders])
+            self.folder_selector.blockSignals(False)
             
             # 對每個選擇的資料夾進行掃描以獲取 base_name, start_index, end_index
             for folder in self.selected_folders:
@@ -895,14 +991,123 @@ class OESAnalyzerGUI(QMainWindow):
             QMessageBox.information(self, "成功", f"已選擇 {len(self.selected_folders)} 個資料夾進行分析")
 
     def _update_results_display(self):
-        """Update the results table based on the selected folder."""
-        selected_folder = self.folder_selector.currentText()  # 獲取選擇的資料夾名稱
+        selected_folder = self.folder_selector.currentText()
         folder_path = next((folder for folder in self.selected_folders if os.path.basename(folder) == selected_folder), None)
-        if folder_path and folder_path in self.analysis_results:
-            result = self.analysis_results[folder_path]  # 獲取對應的分析結果
-            self._update_results_table(result)  # 更新結果表格
+        # 新增判斷：如果 analysis_results 還沒準備好，直接 return，不跳警告
+        if not hasattr(self, 'analysis_results') or not self.analysis_results:
+            return
+        if folder_path and folder_path in self.analysis_results and self.analysis_results[folder_path] is not None:
+            result = self.analysis_results[folder_path]
+            self._update_results_table(result)
+            if folder_path in self.time_info:
+                activate_time, end_time = self.time_info[folder_path]
+                self.time_info_label.setText(f"Activation Time: {activate_time}, End Time: {end_time}")
         else:
-            QMessageBox.warning(self, "警告", "未找到選擇的資料夾分析結果")
+            # 只有在分析結果真的為空時才跳警告
+            if self.analysis_results:  # 只有有分析結果時才跳
+                QMessageBox.warning(self, "警告", "未找到選擇的資料夾分析結果")
+
+    def _update_error_bar_plot(self):
+        """同時顯示多個實驗的 Error bar 圖表（以穩定度為基準），並支援右鍵放大"""
+        try:
+            if not hasattr(self, 'analysis_results') or not self.analysis_results:
+                QMessageBox.warning(self, "警告", "請先進行分析")
+                return
+
+            exp_labels = []
+            total_stabilities = []
+            lowers = []
+            uppers = []
+
+            for idx, folder_path in enumerate(self.selected_folders):
+                df = self.analysis_results.get(folder_path)
+                if df is None or df.empty:
+                    continue
+                stabilities = df['穩定度'].tolist()
+                total_stability = stabilities[-1]  # 總區段
+                min_stability = min(stabilities)
+                max_stability = max(stabilities)
+                lower = total_stability - min_stability
+                upper = max_stability - total_stability
+                exp_labels.append(f"Exp.{idx+1}")
+                total_stabilities.append(total_stability)
+                lowers.append(lower)
+                uppers.append(upper)
+
+            if not exp_labels:
+                QMessageBox.warning(self, "警告", "沒有可用的分析結果")
+                return
+
+            yerr = np.array([lowers, uppers])
+
+            self.plot_canvas.figure.clear()
+            ax = self.plot_canvas.figure.add_subplot(111)
+            ax.errorbar(range(len(exp_labels)), total_stabilities, yerr=yerr, fmt='o', capsize=10, capthick=2, elinewidth=2, color='blue')
+            ax.set_xticks(range(len(exp_labels)))
+            ax.set_xticklabels(exp_labels, rotation=0)
+            ax.set_title('Total Stability with Section Range (All Experiments)')
+            ax.set_xlabel('Experiment')
+            ax.set_ylabel('Stability')
+            ax.grid(True)
+            self.plot_canvas.figure.tight_layout()
+            self.plot_canvas.draw()
+            self.plot_canvas.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.plot_canvas.customContextMenuRequested.connect(self._show_errorbar_context_menu)
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"更新圖表時發生錯誤: {str(e)}")
+
+    def _show_errorbar_context_menu(self, pos):
+        """顯示 error bar 圖的右鍵選單"""
+        menu = QMenu()
+        zoom_action = menu.addAction("放大圖表")
+        action = menu.exec(self.plot_canvas.mapToGlobal(pos))
+        if action == zoom_action:
+            self._zoom_errorbar_plot()
+
+    def _zoom_errorbar_plot(self):
+        """放大 error bar 圖表的窗口（以穩定度為基準）"""
+        try:
+            self.zoom_errorbar_window = QWidget()
+            self.zoom_errorbar_window.setWindowTitle("放大 Error Bar 圖表")
+            layout = QVBoxLayout(self.zoom_errorbar_window)
+            fig = Figure(figsize=(10, 6))
+            ax = fig.add_subplot(111)
+            exp_labels = []
+            total_stabilities = []
+            lowers = []
+            uppers = []
+            for idx, folder_path in enumerate(self.selected_folders):
+                df = self.analysis_results.get(folder_path)
+                if df is None or df.empty:
+                    continue
+                stabilities = df['穩定度'].tolist()
+                total_stability = stabilities[-1]
+                min_stability = min(stabilities)
+                max_stability = max(stabilities)
+                lower = total_stability - min_stability
+                upper = max_stability - total_stability
+                exp_labels.append(f"Exp.{idx+1}")
+                total_stabilities.append(total_stability)
+                lowers.append(lower)
+                uppers.append(upper)
+            yerr = np.array([lowers, uppers])
+            ax.errorbar(range(len(exp_labels)), total_stabilities, yerr=yerr, fmt='o', capsize=10, capthick=2, elinewidth=2, color='blue')
+            ax.set_xticks(range(len(exp_labels)))
+            ax.set_xticklabels(exp_labels, rotation=0)
+            ax.set_title('Total Stability with Section Range (All Experiments)')
+            ax.set_xlabel('Experiment')
+            ax.set_ylabel('Stability')
+            ax.grid(True)
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            layout.addWidget(canvas)
+            self.zoom_errorbar_window.setLayout(layout)
+            self.zoom_errorbar_window.resize(900, 600)
+            self.zoom_errorbar_window.show()
+            self.zoom_errorbar_window.raise_()
+            self.zoom_errorbar_window.activateWindow()
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"放大圖表時發生錯誤: {str(e)}")
 
 class MultiFolderDialog(QDialog):
     def __init__(self, parent=None):
